@@ -136,6 +136,32 @@ pub fn deregister_emitter(env: &Env, emitter: &Address) {
 }
 
 // ---------------------------------------------------------------------------
+// Re-entrancy guard (issue #460)
+// ---------------------------------------------------------------------------
+
+/// Return `true` if the `Executing` flag is currently set, indicating that
+/// another `emit` or `batch_emit` call is in progress on this ledger.
+pub fn is_executing(env: &Env) -> bool {
+    env.storage()
+        .instance()
+        .get::<_, bool>(&DataKey::Executing)
+        .unwrap_or(false)
+}
+
+/// Set the `Executing` flag to `true`.  Called at the start of every mutating
+/// dispatch before any other state is read or written.
+pub fn set_executing(env: &Env) {
+    env.storage().instance().set(&DataKey::Executing, &true);
+}
+
+/// Clear the `Executing` flag.  Called at the end of every mutating dispatch,
+/// whether the call succeeded or failed (via the `?` operator on the inner
+/// result), so the flag is never left set across ledger boundaries.
+pub fn clear_executing(env: &Env) {
+    env.storage().instance().remove(&DataKey::Executing);
+}
+
+// ---------------------------------------------------------------------------
 // Zero-address / forbidden-admin guards
 // ---------------------------------------------------------------------------
 

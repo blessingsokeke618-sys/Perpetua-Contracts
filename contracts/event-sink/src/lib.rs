@@ -116,6 +116,19 @@ impl EventSink {
     ///
     /// Returns the globally-monotonic `entry_id` assigned to this entry.
     ///
+    /// # Re-entrancy protection (issue #460)
+    ///
+    /// An `Executing` instance flag is set before any state is mutated and
+    /// cleared unconditionally on return.  A concurrent or re-entrant
+    /// invocation that finds the flag set returns [`SinkError::ReentrancyGuard`]
+    /// immediately.
+    ///
+    /// # Invariant assertion (issue #460)
+    ///
+    /// After the counter is incremented the post-condition
+    /// `new_count == entry_id + 1` is checked.  Failure returns
+    /// [`SinkError::InvariantViolation`] and reverts the call.
+    ///
     /// # Validation (issue #461 — custom error messages per failure mode)
     ///
     /// | Check | Error on failure |
@@ -130,24 +143,49 @@ impl EventSink {
     /// # Errors
     ///
     /// * Any of the validation errors listed above.
+    /// * [`SinkError::ReentrancyGuard`] — concurrent re-entrant call detected.
     /// * [`SinkError::EntryCountOverflow`] — the entry counter reached `u64::MAX`.
+    /// * [`SinkError::InvariantViolation`] — post-condition counter check failed.
     pub fn emit(env: Env, caller: Address, entry: SinkEntry) -> Result<u64, SinkError> {
         caller.require_auth();
-        let config = storage::load_config(&env)?;
+
+        // Re-entrancy gate: fail immediately if another emit is in progress.
+        if storage::is_executing(&env) {
+            return Err(SinkError::ReentrancyGuard);
+        }
+        storage::set_executing(&env);
+
+        let result = Self::emit_inner(&env, &caller, entry);
+
+        // Always clear the guard, whether the inner call succeeded or not.
+        storage::clear_executing(&env);
+        result
+    }
+
+    fn emit_inner(env: &Env, caller: &Address, entry: SinkEntry) -> Result<u64, SinkError> {
+        let config = storage::load_config(env)?;
 
         if !config.accepting {
             return Err(SinkError::Unauthorized);
         }
-        if !storage::is_registered_emitter(&env, &caller) {
+        if !storage::is_registered_emitter(env, caller) {
             return Err(SinkError::CallerNotRegisteredEmitter);
         }
 
-        Self::validate_entry(&env, &entry)?;
+        Self::validate_entry(env, &entry)?;
 
         // CEI: allocate ID and write counter before emitting the event.
-        let entry_id = storage::allocate_entry_id(&env)?;
+        let count_before = storage::entry_count(env);
+        let entry_id = storage::allocate_entry_id(env)?;
+        let count_after = storage::entry_count(env);
+
+        // Invariant: counter must have advanced by exactly 1.
+        if count_after != count_before.saturating_add(1) || count_after != entry_id + 1 {
+            return Err(SinkError::InvariantViolation);
+        }
+
         events::entry_accepted(
-            &env,
+            env,
             entry_id,
             entry.source_contract,
             entry.topic,
@@ -164,25 +202,54 @@ impl EventSink {
     /// assigned; subsequent IDs are contiguous (`first_id + 1`, `first_id + 2`,
     /// …).
     ///
+    /// # Re-entrancy protection (issue #460)
+    ///
+    /// Same `Executing` flag guard as [`Self::emit`].
+    ///
+    /// # Invariant assertion (issue #460)
+    ///
+    /// After all IDs are allocated the post-condition
+    /// `final_count == first_id + batch_size` is checked.
+    ///
     /// # Errors
     ///
     /// * [`SinkError::EmptyBatch`], [`SinkError::BatchTooLarge`]
     /// * Any per-entry validation error (checked before execution).
     /// * [`SinkError::Unauthorized`] — sink is not accepting.
     /// * [`SinkError::CallerNotRegisteredEmitter`] — unknown caller.
+    /// * [`SinkError::ReentrancyGuard`] — concurrent re-entrant call detected.
     /// * [`SinkError::EntryCountOverflow`]
+    /// * [`SinkError::InvariantViolation`] — post-condition counter check failed.
     pub fn batch_emit(
         env: Env,
         caller: Address,
         entries: Vec<SinkEntry>,
     ) -> Result<u64, SinkError> {
         caller.require_auth();
-        let config = storage::load_config(&env)?;
+
+        // Re-entrancy gate.
+        if storage::is_executing(&env) {
+            return Err(SinkError::ReentrancyGuard);
+        }
+        storage::set_executing(&env);
+
+        let result = Self::batch_emit_inner(&env, &caller, entries);
+
+        storage::clear_executing(&env);
+        result
+    }
+
+    fn batch_emit_inner(
+        env: &Env,
+        caller: &Address,
+        entries: Vec<SinkEntry>,
+    ) -> Result<u64, SinkError> {
+        let config = storage::load_config(env)?;
 
         if !config.accepting {
             return Err(SinkError::Unauthorized);
         }
-        if !storage::is_registered_emitter(&env, &caller) {
+        if !storage::is_registered_emitter(env, caller) {
             return Err(SinkError::CallerNotRegisteredEmitter);
         }
 
@@ -197,13 +264,16 @@ impl EventSink {
         // Pre-flight: validate every entry before mutating state.
         for i in 0..n {
             let entry = entries.get_unchecked(i);
-            Self::validate_entry(&env, &entry)?;
+            Self::validate_entry(env, &entry)?;
         }
 
+        // Snapshot counter before any allocation.
+        let count_before = storage::entry_count(env);
+
         // Execution: allocate IDs and emit events.
-        let first_id = storage::allocate_entry_id(&env)?;
+        let first_id = storage::allocate_entry_id(env)?;
         events::entry_accepted(
-            &env,
+            env,
             first_id,
             entries.get_unchecked(0).source_contract,
             entries.get_unchecked(0).topic,
@@ -211,16 +281,25 @@ impl EventSink {
             entries.get_unchecked(0).payload,
         );
         for i in 1..n {
-            let entry_id = storage::allocate_entry_id(&env)?;
+            let entry_id = storage::allocate_entry_id(env)?;
             let entry = entries.get_unchecked(i);
             events::entry_accepted(
-                &env,
+                env,
                 entry_id,
                 entry.source_contract,
                 entry.topic,
                 entry.sequence,
                 entry.payload,
             );
+        }
+
+        // Invariant: counter must have advanced by exactly `n`.
+        let count_after = storage::entry_count(env);
+        let expected_count = count_before
+            .checked_add(n as u64)
+            .ok_or(SinkError::EntryCountOverflow)?;
+        if count_after != expected_count {
+            return Err(SinkError::InvariantViolation);
         }
 
         Ok(first_id)
@@ -323,6 +402,8 @@ impl EventSink {
             11 => SinkError::EntryCountOverflow.message(),
             12 => SinkError::EmptyBatch.message(),
             13 => SinkError::BatchTooLarge.message(),
+            14 => SinkError::ReentrancyGuard.message(),
+            15 => SinkError::InvariantViolation.message(),
             _ => "",
         };
         soroban_sdk::String::from_str(&env, msg)
@@ -472,4 +553,5 @@ mod test {
     mod common;
     mod emit;
     mod errors;
+    mod invariants;
 }

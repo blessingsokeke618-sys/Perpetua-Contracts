@@ -75,6 +75,19 @@ pub enum SinkError {
     EmptyBatch = 12,
     /// Batch call exceeded `MAX_BATCH_SIZE`; split into smaller batches.
     BatchTooLarge = 13,
+
+    // -----------------------------------------------------------------------
+    // Group E — Security (issue #460)
+    // -----------------------------------------------------------------------
+    /// A re-entrant call was detected; the contract is already executing an
+    /// `emit` or `batch_emit` invocation.  The in-flight call set the
+    /// `Executing` instance flag before any external side-effect; a concurrent
+    /// or re-entrant invocation finds it set and aborts immediately.
+    ReentrancyGuard = 14,
+    /// A post-condition invariant check failed after a state mutation.  This
+    /// variant is never reachable during correct execution; if triggered it
+    /// indicates a logic bug or unexpected state desync and the call reverts.
+    InvariantViolation = 15,
 }
 
 impl SinkError {
@@ -107,6 +120,12 @@ impl SinkError {
             SinkError::EntryCountOverflow => "entry counter overflow; no more entries accepted",
             SinkError::EmptyBatch => "batch must contain at least one entry",
             SinkError::BatchTooLarge => "batch exceeds MAX_BATCH_SIZE; split into smaller batches",
+            SinkError::ReentrancyGuard => {
+                "re-entrant call detected; another emit is already in progress"
+            }
+            SinkError::InvariantViolation => {
+                "post-condition invariant check failed; state desync detected"
+            }
         }
     }
 
@@ -130,6 +149,7 @@ impl SinkError {
             | SinkError::InvalidSequence
             | SinkError::PayloadTooLarge => 'C',
             SinkError::EntryCountOverflow | SinkError::EmptyBatch | SinkError::BatchTooLarge => 'D',
+            SinkError::ReentrancyGuard | SinkError::InvariantViolation => 'E',
         }
     }
 }

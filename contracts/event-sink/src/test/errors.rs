@@ -34,6 +34,8 @@ fn all_error_messages_are_non_empty() {
         SinkError::EntryCountOverflow,
         SinkError::EmptyBatch,
         SinkError::BatchTooLarge,
+        SinkError::ReentrancyGuard,
+        SinkError::InvariantViolation,
     ];
     for v in variants {
         assert!(
@@ -60,6 +62,8 @@ fn all_error_messages_are_unique() {
         SinkError::EntryCountOverflow,
         SinkError::EmptyBatch,
         SinkError::BatchTooLarge,
+        SinkError::ReentrancyGuard,
+        SinkError::InvariantViolation,
     ];
     let mut seen = std::collections::HashSet::new();
     for v in variants {
@@ -98,6 +102,10 @@ fn error_groups_are_correct() {
     assert_eq!(SinkError::EntryCountOverflow.group(), 'D');
     assert_eq!(SinkError::EmptyBatch.group(), 'D');
     assert_eq!(SinkError::BatchTooLarge.group(), 'D');
+
+    // Group E — Security (issue #460)
+    assert_eq!(SinkError::ReentrancyGuard.group(), 'E');
+    assert_eq!(SinkError::InvariantViolation.group(), 'E');
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +138,8 @@ fn error_message_view_returns_correct_string_for_all_discriminants() {
         (11, SinkError::EntryCountOverflow.message()),
         (12, SinkError::EmptyBatch.message()),
         (13, SinkError::BatchTooLarge.message()),
+        (14, SinkError::ReentrancyGuard.message()),
+        (15, SinkError::InvariantViolation.message()),
     ];
     for &(disc, expected) in pairs {
         let got = h.client.error_message(&disc);

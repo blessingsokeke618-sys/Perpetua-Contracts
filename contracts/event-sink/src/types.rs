@@ -15,6 +15,12 @@ pub enum DataKey {
     PendingAdmin,
     /// Instance storage: monotonic count of accepted entries.
     EntryCount,
+    /// Instance storage: re-entrancy guard flag (issue #460).
+    /// Set to `true` on entry to `emit` / `batch_emit`, cleared on exit.
+    /// A second invocation that finds this flag set returns
+    /// [`SinkError::ReentrancyGuard`] immediately, before reading any other
+    /// state.
+    Executing,
 }
 
 /// On-chain configuration record for the event-sink.
