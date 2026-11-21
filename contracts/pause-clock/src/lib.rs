@@ -48,9 +48,7 @@ compile_error!(
      wasm32-unknown-unknown can emit unsupported features."
 );
 #[cfg(all(target_family = "wasm", debug_assertions))]
-compile_error!(
-    "Perpetua production WASM must be built without debug assertions; use --release."
-);
+compile_error!("Perpetua production WASM must be built without debug assertions; use --release.");
 #[cfg(all(target_family = "wasm", feature = "testutils"))]
 compile_error!("Perpetua production WASM must not enable the testutils feature.");
 
@@ -97,11 +95,7 @@ impl PauseClock {
     /// # Errors
     ///
     /// * [`Error::AlreadyInitialized`] — `init` has already been called.
-    pub fn init(
-        env: Env,
-        admin: Address,
-        stream_contract: Address,
-    ) -> Result<(), Error> {
+    pub fn init(env: Env, admin: Address, stream_contract: Address) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Config) {
             return Err(Error::AlreadyInitialized);
         }
@@ -148,10 +142,7 @@ impl PauseClock {
         let now = env.ledger().timestamp();
         config.paused = true;
         config.paused_at = Some(now);
-        config.cycle_count = config
-            .cycle_count
-            .checked_add(1)
-            .ok_or(Error::Overflow)?;
+        config.cycle_count = config.cycle_count.checked_add(1).ok_or(Error::Overflow)?;
         storage::save_config(&env, &config);
 
         events::clock_paused(&env, now, config.cycle_count);
@@ -189,7 +180,13 @@ impl PauseClock {
         config.paused_at = None;
         storage::save_config(&env, &config);
 
-        events::clock_resumed(&env, now, paused_duration, config.paused_total, config.cycle_count);
+        events::clock_resumed(
+            &env,
+            now,
+            paused_duration,
+            config.paused_total,
+            config.cycle_count,
+        );
         Ok(())
     }
 
@@ -268,9 +265,12 @@ impl PauseClock {
         if n > MAX_BATCH_SIZE {
             return Err(Error::BatchTooLarge);
         }
-        // Parallel vecs must have matching length.
+        // Parallel vecs must have matching length. This is a client-side
+        // invariant: stream_ids[i] must have a corresponding totals[i].
+        // Returning LengthMismatch (not Overflow) makes the failure
+        // unambiguous — it is not an arithmetic overflow inside the contract.
         if totals.len() != n {
-            return Err(Error::Overflow);
+            return Err(Error::LengthMismatch);
         }
 
         // Tight loop: one persistent write per stream, no additional
@@ -502,9 +502,15 @@ impl PauseClock {
     ///
     /// # Errors
     ///
-    /// * [`Error::Unauthorized`]
+    /// * [`Error::Unauthorized`] — caller is not the current admin.
+    /// * [`Error::InvalidNewAdmin`] — `stream_contract` is the zero address or
+    ///   the contract itself; either would make every caller-gated entry point
+    ///   permanently unreachable.
     pub fn set_stream_contract(env: Env, stream_contract: Address) -> Result<(), Error> {
         let mut config = Self::require_admin(&env)?;
+        if storage::is_forbidden_admin(&env, &stream_contract) {
+            return Err(Error::InvalidNewAdmin);
+        }
         config.stream_contract = stream_contract;
         storage::save_config(&env, &config);
         Ok(())
@@ -517,9 +523,9 @@ impl PauseClock {
 
 #[cfg(test)]
 mod test {
-    mod common;
-    mod archival;
-    mod batch;
-    mod auth;
     mod admin_rotation;
+    mod archival;
+    mod auth;
+    mod batch;
+    mod common;
 }
