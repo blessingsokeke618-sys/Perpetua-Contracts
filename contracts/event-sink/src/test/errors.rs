@@ -8,6 +8,7 @@
 //! 4. Each validation failure path in `emit` returns the specific error
 //!    variant documented for that failure (not a generic catch-all).
 
+use soroban_sdk::testutils::Address as _;
 use soroban_sdk::{Address, Bytes, Symbol};
 
 use super::common::*;

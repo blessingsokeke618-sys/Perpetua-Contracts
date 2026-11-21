@@ -302,7 +302,7 @@ impl EventSink {
         // Invariant: counter must have advanced by exactly `n`.
         let count_after = storage::entry_count(env);
         let expected_count = count_before
-            .checked_add(u64::from(n))
+            .checked_add(n as u64)
             .ok_or(SinkError::EntryCountOverflow)?;
         if count_after != expected_count {
             return Err(SinkError::InvariantViolation);
