@@ -192,6 +192,49 @@ fn executing_flag_cleared_after_failed_batch_emit_validation_error() {
     assert_eq!(id, 0);
 }
 
+#[test]
+fn emit_at_counter_limit_returns_overflow_without_changing_the_counter() {
+    let h = Harness::new();
+    h.env.as_contract(&h.contract_id, || {
+        h.env
+            .storage()
+            .instance()
+            .set(&DataKey::EntryCount, &u64::MAX);
+    });
+
+    let err = h
+        .client
+        .try_emit(&h.emitter, &h.entry(1))
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(err, SinkError::EntryCountOverflow);
+    assert_eq!(h.client.entry_count(), u64::MAX);
+}
+
+#[test]
+fn batch_overflow_does_not_partially_advance_the_counter() {
+    let h = Harness::new();
+    h.env.as_contract(&h.contract_id, || {
+        h.env
+            .storage()
+            .instance()
+            .set(&DataKey::EntryCount, &(u64::MAX - 1));
+    });
+    let mut entries = Vec::new(&h.env);
+    entries.push_back(h.entry(1));
+    entries.push_back(h.entry(2));
+
+    let err = h
+        .client
+        .try_batch_emit(&h.emitter, &entries)
+        .unwrap_err()
+        .unwrap();
+
+    assert_eq!(err, SinkError::EntryCountOverflow);
+    assert_eq!(h.client.entry_count(), u64::MAX - 1);
+}
+
 // ---------------------------------------------------------------------------
 // §4  New error variants carry correct messages and groups
 // ---------------------------------------------------------------------------

@@ -178,9 +178,15 @@ impl EventSink {
         let count_before = storage::entry_count(env);
         let entry_id = storage::allocate_entry_id(env)?;
         let count_after = storage::entry_count(env);
+        let expected_count = count_before
+            .checked_add(1)
+            .ok_or(SinkError::EntryCountOverflow)?;
+        let expected_next_id = entry_id
+            .checked_add(1)
+            .ok_or(SinkError::InvariantViolation)?;
 
         // Invariant: counter must have advanced by exactly 1.
-        if count_after != count_before.saturating_add(1) || count_after != entry_id + 1 {
+        if count_after != expected_count || count_after != expected_next_id {
             return Err(SinkError::InvariantViolation);
         }
 
@@ -296,7 +302,7 @@ impl EventSink {
         // Invariant: counter must have advanced by exactly `n`.
         let count_after = storage::entry_count(env);
         let expected_count = count_before
-            .checked_add(n as u64)
+            .checked_add(u64::from(n))
             .ok_or(SinkError::EntryCountOverflow)?;
         if count_after != expected_count {
             return Err(SinkError::InvariantViolation);
@@ -554,4 +560,5 @@ mod test {
     mod emit;
     mod errors;
     mod invariants;
+    mod partitions;
 }

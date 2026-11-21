@@ -45,7 +45,8 @@ impl<'a> Harness<'a> {
     pub fn advance(&self, seconds: u64) {
         let info = self.env.ledger().get();
         self.env.ledger().set_timestamp(info.timestamp + seconds);
-        let ledgers = ((seconds + 4) / 5) as u32;
+        let ledgers =
+            u32::try_from(seconds.div_ceil(5)).expect("test ledger advancement must fit in a u32");
         self.env
             .ledger()
             .set_sequence_number(info.sequence_number.saturating_add(ledgers));
